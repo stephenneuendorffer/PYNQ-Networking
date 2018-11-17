@@ -30,6 +30,7 @@
 
 from .lib import *
 from .overlays.mqttsn import MqttsnOverlay
+from .overlays.ipstack import IPStackOverlay
 from .kernel_module import LinkManager
 
 
