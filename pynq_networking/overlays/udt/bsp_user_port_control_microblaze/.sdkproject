@@ -1,0 +1,4 @@
+THIRPARTY=false
+HW_PROJECT_REFERENCE=hw_base
+PROCESSOR=user_port_control_microblaze_microblaze_0
+MSS_FILE=system.mss
