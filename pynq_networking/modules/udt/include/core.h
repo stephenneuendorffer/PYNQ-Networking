@@ -57,7 +57,12 @@ written by
 
 enum UDTSockType {UDT_STREAM = 1, UDT_DGRAM};
 
+#ifdef __MICROBLAZE__
 typedef uint64_t IOPType;
+#else
+#include "ap_int.h"
+typedef ap_uint<8*BYTESPERCYCLE> IOPType;
+#endif
 
 struct simple_sockaddr_in {
   uint16_t sin_port;
@@ -122,7 +127,7 @@ public: //API
 
 public:
 
-    void tryConnect(volatile IOPType *networkIOP);
+    void tryConnect(const simple_sockaddr_in* serv_addr);
     bool isConnected() {
         return m_bConnected;
     }

@@ -44,8 +44,13 @@ written by
 
 #include "udt.h"
 #include <cstdlib>
+#ifdef __MICROBLAZE__
 #include "pyprintf.h"
+#else
+#define pyprintf printf
 
+extern uint64_t current_time;
+#endif
 ////////////////////////////////////////////////////////////////////////////////
 
 class CTimer

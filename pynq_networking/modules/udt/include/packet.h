@@ -46,11 +46,16 @@ written by
 #include "stddef.h"
 
 //#ifdef WIN32
+#ifdef __MICROBLAZE__
    struct iovec
    {
       int iov_len;
       char* iov_base;
    };
+#else
+#include <arpa/inet.h>
+
+#endif
 //#endif
 
 class CChannel;

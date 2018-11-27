@@ -1,8 +1,9 @@
 #pragma once
 #include "ap_int.h"
+#include "hls_stream.h"
 
 //#include "eth_interface.h"
-//#include "ip.hpp"
+#include "ip.hpp"
 //#include "cam.h"
 #include "udt.h"
 
@@ -30,14 +31,15 @@ typedef int arpcache_insert_return;
 //    int dummy;
 //};
 void udt_ingress(ap_uint<32> ipAddress,
-                 stream<StreamType> &dataIn, stream<StreamType> &dataOut);
+                 hls::stream<StreamType> &dataIn, hls::stream<StreamType> &dataOut);
 
 void udt_egress(ap_uint<48> macAddress, ap_uint<32> ipAddress,
-                stream<StreamType> &dataIn, stream<StreamType> &dataOut,
-                stream<arpcache_insert_args> &arpcache_insert_start, stream<arpcache_insert_return> &arpcache_insert_done);
+                hls::stream<StreamType> &dataIn, hls::stream<StreamType> &dataOut,
+                hls::stream<arpcache_insert_args> &arpcache_insert_start, hls::stream<arpcache_insert_return> &arpcache_insert_done);
 //,
 //              ArpCacheT &arpcache);
-void egress_buffer_writer(hls::stream<StreamType> &in,    // input
+void egress_buffer_writer(hls::stream<ap_uint<32> > &params,
+                          hls::stream<StreamType> &in,    // input
                    //hls::stream<short> &input_length_stream, // input
                    //hls::stream<bufferIDT> &buffer_id_stream, // input
                    ap_uint<8*BYTESPERCYCLE> buffer_storage[2048/BYTESPERCYCLE][BUFFERCOUNT], // written
@@ -64,18 +66,27 @@ void ingress_buffer_writer(hls::stream<StreamType> &in,    // input
                            ap_uint<8*BYTESPERCYCLE> buffer_storage[2048/BYTESPERCYCLE][BUFFERCOUNT], // written
                            struct Block blocks[BUFFERCOUNT]
                            );
-void ingress_buffer_reader(hls::stream<StreamType> &out,    // output
+void ingress_buffer_reader(hls::stream<ap_uint<32> > &params,
+                           hls::stream<StreamType> &out,    // output
                            ap_uint<8*BYTESPERCYCLE> buffer_storage[2048/BYTESPERCYCLE][BUFFERCOUNT], // read
                            struct Block blocks[BUFFERCOUNT]
                            );
 
-void dumb_egress_control(hls::stream<int> &egress_reader_start,
-                         volatile ap_uint<8*BYTESPERCYCLE> *networkIOP,
-                         struct Block blocks[BUFFERCOUNT]);
-void dumb_ingress_control(hls::stream<int> &ingress_writer_ctrl,
-                          hls::stream<int> &ingress_buffer_id,
-                          volatile ap_uint<8*BYTESPERCYCLE> *networkIOP,
-                          struct Block blocks[BUFFERCOUNT]);
+
+class CUDT_control {
+    volatile IOPType *networkIOP;
+    CUDT udt;
+public:
+    CUDT_control(volatile IOPType *_networkIOP):networkIOP(_networkIOP), udt(_networkIOP) {}
+    void dumb_egress_control(hls::stream<int> &egress_reader_start,
+                             struct Block blocks[BUFFERCOUNT]);
+    void dumb_ingress_control(hls::stream<int> &ingress_writer_ctrl,
+                              hls::stream<int> &ingress_buffer_id,
+                              struct Block blocks[BUFFERCOUNT]);
+    bool isConnected() {
+        return udt.isConnected();
+    }
+};
 
 namespace udt {
     // The UDT spec defines the first 16 bits of a control packet to be a '1' followed

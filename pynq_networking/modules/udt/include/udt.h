@@ -46,7 +46,7 @@ written by
 const static int mss=1500;
 const static int BUFFERSIZE=2048; // power of 2 greater than mss.
 const static int BYTESPERCYCLE=8;
-const static int BUFFERCOUNT=32;
+const static int BUFFERCOUNT=16;
 
 /*
 #ifndef WIN32
@@ -80,9 +80,16 @@ struct Block
     uint32_t padding;
 };
 
+#ifdef __MICROBLAZE__
+// Currently all the Microblaze code that uses BlockID has explicit
+// modulo increments.  Probably this should be turned into it's own
+// Little type (Like CSeqNo).
 typedef unsigned int BlockID;
-//typedef ap_uint<UnsignedBitWidth<BUFFERCOUNT-1>::Value> BlockID;
-
+#else
+#include "ap_int.h"
+#include "hls/utils/x_hls_utils.h"
+typedef ap_uint<BitWidth<BUFFERCOUNT-1>::Value> BlockID;
+#endif
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -403,6 +410,8 @@ struct UDP {
     unsigned short len;
     unsigned short chksum;
 };
+
+#ifdef __MICROBLAZE__
 #include "mb_interface.h"
 static unsigned char get_ttl(volatile unsigned char *packet) {
     volatile struct IP * ip_hdr = (struct IP *)packet;
@@ -503,11 +512,17 @@ static uint32_t htonl(uint32_t in) {
     return mb_swapb(in);
 }
 
-static int ingress_params(int enable, unsigned int iRcvLastAck) {
-    putfsl(enable,0); 
+static int ingress_init(int enable, unsigned int iRcvLastAck) {
+    putfsl(enable,0);
     putfsl(iRcvLastAck,0);
-    putfsl(1,3); // Reset ingress_buffer_reader    
+    putfsl(iRcvLastAck,3); // Reset ingress_buffer_reader
     putfsl(1,4); // Reset egress_buffer_writer
+    return 0;
+}
+
+static int ingress_params(int enable, unsigned int iRcvLastAck) {
+    putfsl(enable,0);
+    putfsl(iRcvLastAck,0);
     return 0;
 }
 
@@ -532,6 +547,175 @@ static int ingress_get(unsigned int *buffer) {
     fsl_isinvalid(invalid);
     return !invalid;
 }
+#else
+
+#include "ap_int.h"
+#include "hls_stream.h"
+
+static unsigned char get_ttl(volatile unsigned char *packet) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    unsigned char val;
+    val = ip_hdr->ttl;
+    return val;
+}
+static unsigned char get_proto(volatile unsigned char *packet) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    unsigned char val;
+    val = ip_hdr->proto;
+    return val;
+}
+static unsigned int get_src(volatile unsigned char *packet) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    unsigned int val;
+    val = ip_hdr->src;
+    return val;
+}
+static unsigned int get_dst(volatile unsigned char *packet) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    unsigned int val;
+    val = ip_hdr->dst;
+    return val;
+}
+static unsigned short get_ip_len(volatile unsigned char *packet) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    unsigned short val;
+    val = ip_hdr->len;
+    return val;
+}
+static void set_ip_len(volatile unsigned char *packet, unsigned short val) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    ip_hdr->len = val;
+}
+static unsigned short get_ip_chksum(volatile unsigned char *packet) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    unsigned short val;
+    val = ip_hdr->chksum;
+    return val;
+}
+static void set_ip_chksum(volatile unsigned char *packet, unsigned short val) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    ip_hdr->chksum = val;
+}
+static void set_dst(volatile unsigned char *packet, uint32_t val) {
+    volatile struct IP * ip_hdr = (struct IP *)packet;
+    ip_hdr->dst = val;
+}
+
+
+static unsigned short get_sport(volatile unsigned char *packet) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    unsigned short val;
+    val = udp_hdr->sport;
+    return val;
+}
+static unsigned short get_dport(volatile unsigned char *packet) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    unsigned short val;
+    val = udp_hdr->dport;
+    return val;
+}
+static unsigned short get_len(volatile unsigned char *packet) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    unsigned short val;
+    val = udp_hdr->len;
+    return val;
+}
+static unsigned short get_chksum(volatile unsigned char *packet) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    unsigned short val;
+    val = udp_hdr->chksum;
+    return val;
+}
+static void set_sport(volatile unsigned char *packet, unsigned short val) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    udp_hdr->sport = val;
+}
+static void set_dport(volatile unsigned char *packet, unsigned short val) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    udp_hdr->dport = val;
+}
+static void set_len(volatile unsigned char *packet, unsigned short val) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    udp_hdr->len = val;
+}
+static void set_chksum(volatile unsigned char *packet, unsigned short val) {
+    volatile struct UDP * udp_hdr = (struct UDP *)&packet[20];
+    udp_hdr->chksum = val;
+}
+
+
+// static uint32_t ntohl(uint32_t in) {
+//     return in; //mb_swapb(in);
+// }
+// static uint32_t htonl(uint32_t in) {
+//     return in; //mb_swapb(in);
+// }
+
+extern hls::stream<int> ingress_buffer_writer_params;
+extern hls::stream<ap_uint<32> > ingress_buffer_reader_params;
+extern hls::stream<ap_uint<32> > egress_buffer_writer_params;
+extern hls::stream<ap_uint<32> > egress_buffer_reader_params;
+extern hls::stream<int> egress_buffer_reader_control;
+extern hls::stream<int> ingress_buffer_writer_buffer_id;
+static int ingress_init(int enable, unsigned int iRcvLastAck) {
+    ingress_buffer_writer_params.write(enable);
+    ingress_buffer_writer_params.write(iRcvLastAck);
+    ingress_buffer_reader_params.write(iRcvLastAck);
+    egress_buffer_writer_params.write(1);
+
+    //putfsl(enable,0);
+    //putfsl(iRcvLastAck,0);
+    //putfsl(1,3); // Reset ingress_buffer_reader
+    //putfsl(1,4); // Reset egress_buffer_writer
+    return 0;
+}
+static int ingress_params(int enable, unsigned int iRcvLastAck) {
+    std::cout << "***IngressParams!\n";
+    ingress_buffer_writer_params.write(enable);
+    ingress_buffer_writer_params.write(iRcvLastAck);
+
+    //putfsl(enable,0);
+    //putfsl(iRcvLastAck,0);
+    return 0;
+}
+
+static int egress_params(unsigned int ip, unsigned int ipDst, unsigned int dport, unsigned int peerID) {
+    egress_buffer_reader_params.write(ip);
+    egress_buffer_reader_params.write(ipDst);
+    egress_buffer_reader_params.write(dport);
+    egress_buffer_reader_params.write(peerID);
+
+    // putfsl(ip,1);
+    // putfsl(ipDst,1);
+    // putfsl(dport,1);
+    // putfsl(peerID,1);
+    return 0;
+}
+static int egress_send(unsigned int buffer) {
+    egress_buffer_reader_control.write(buffer);
+    return 1;
+    // nputfsl(buffer, 2);
+    // int invalid;
+    // fsl_isinvalid(invalid);
+    // return !invalid;
+}
+static int ingress_get(unsigned int *buffer) {
+    if(ingress_buffer_writer_buffer_id.empty())
+        return 0;
+    else {
+        *buffer = ingress_buffer_writer_buffer_id.read();
+        return 1;
+    }
+    // unsigned int b;
+    // ngetfsl(b, 0);
+    // *buffer = b;
+    // int invalid;
+    // fsl_isinvalid(invalid);
+    // return !invalid;
+}
+#endif
+
+
 
 #endif
 #endif

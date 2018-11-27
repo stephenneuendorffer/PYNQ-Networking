@@ -593,8 +593,77 @@ void CUDT::listen()
    m_bListening = true;
 }
 */
-void CUDT::tryConnect(volatile IOPType *networkIOP) {
-  /*
+#ifndef __MICROBLAZE__
+#include "app.h"
+#endif
+void CUDT::tryConnect(const simple_sockaddr_in* serv_addr) {
+  pyprintf("Connect from %x:%d\n", serv_addr->sin_addr, serv_addr->sin_port);
+    //   CGuard cg(m_ConnectionLock);
+
+   // if (!m_bOpened)
+   //    throw CUDTException(5, 0, 0);
+
+   // if (m_bListening)
+   //    throw CUDTException(5, 2, 0);
+
+   // if (m_bConnecting || m_bConnected)
+   //    throw CUDTException(5, 2, 0);
+
+   m_bConnecting = true;
+
+   // record peer/server address
+   // delete m_pPeerAddr;
+   //m_pPeerAddr = (AF_INET == m_iIPversion) ? (sockaddr*)new sockaddr_in : (sockaddr*)new sockaddr_in6;
+   //memcpy(m_pPeerAddr, serv_addr, (AF_INET == m_iIPversion) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
+   m_pPeerAddr = *serv_addr;
+
+   // register this socket in the rendezvous queue
+   // RendezevousQueue is used to temporarily store incoming handshake, non-rendezvous connections also require this function
+   uint64_t ttl = 3000000;
+   if (m_bRendezvous)
+      ttl *= 10;
+   ttl += CTimer::getTime();
+   //m_pRcvQueue->registerConnector(m_SocketID, this, m_iIPversion, serv_addr, ttl);
+
+   // This is my current configurations
+   m_ConnReq.m_iVersion = m_iVersion;
+   m_ConnReq.m_iType = m_iSockType;
+   m_ConnReq.m_iMSS = m_iMSS;
+   m_ConnReq.m_iFlightFlagSize = (m_iRcvBufSize < m_iFlightFlagSize)? m_iRcvBufSize : m_iFlightFlagSize;
+   m_ConnReq.m_iReqType = (!m_bRendezvous) ? 1 : 0;
+   m_ConnReq.m_iID = m_SocketID;
+   m_ConnReq.m_piPeerIP[0] = htonl(serv_addr->sin_addr);
+   //CIPAddress::ntop(serv_addr, m_ConnReq.m_piPeerIP, m_iIPversion);
+
+   // Random Initial Sequence Number
+   // FIXME
+   //srand((unsigned int)CTimer::getTime());
+   m_iISN = m_ConnReq.m_iISN = 0xf1657; // (int32_t)(CSeqNo::m_iMaxSeqNo * (double(rand()) / RAND_MAX));
+
+   m_iLastDecSeq = m_iISN - 1;
+   m_iSndLastAck = m_iISN;
+   m_iSndLastDataAck = m_iISN;
+   m_iSndCurrSeqNo = m_iISN - 1;
+   m_iSndLastAck2 = m_iISN;
+   m_ullSndLastAck2Time = CTimer::getTime();
+
+   m_iPayloadSize = 48; // Why isn't this set already?
+   
+   // Inform the server my configurations.
+   CPacket request;
+   char* reqdata = packet_buffer; // new char [m_iPayloadSize];
+   request.pack(0, NULL, reqdata, m_iPayloadSize);
+   // ID = 0, connection request
+   request.m_iID = 0;
+
+   int hs_size = m_iPayloadSize;
+   assert(m_ConnReq.serialize(reqdata, hs_size) == 0);
+
+   request.setLength(hs_size);
+   sendto(serv_addr, request);
+   m_llLastReqTime = CTimer::getTime();
+
+#ifdef NEVER
     bool can_send_control_packet = (IOPType(networkIOP[0x190]) == 0);
     if(m_iConnectState >= -2 && can_send_control_packet) {
         udt::ctrl_handshake_header ah;
@@ -683,7 +752,8 @@ void CUDT::tryConnect(volatile IOPType *networkIOP) {
                 m_pSndTimeWindow = new CPktTimeWindow<16,16>();
             }
         }
-	}*/
+	}
+#endif
 }
 
 void CUDT::connect(const simple_sockaddr_in* serv_addr)
@@ -823,6 +893,7 @@ int CUDT::connect(const CPacket& response) throw ()
    if (!m_bConnecting)
       return -1;
 
+   std::cout << response.getType() << " " << m_ConnRes.m_iType << "\n";
    if (m_bRendezvous && ((0 == response.getFlag()) || (1 == response.getType())) && (0 != m_ConnRes.m_iType))
    {
       //a data packet or a keep-alive packet comes, which means the peer side is already connected
@@ -858,6 +929,16 @@ int CUDT::connect(const CPacket& response) throw ()
          m_ConnReq.m_iReqType = -1;
          m_ConnReq.m_iCookie = m_ConnRes.m_iCookie;
          m_llLastReqTime = 0;
+         CPacket request;
+         char* reqdata = packet_buffer; // new char [m_iPayloadSize];
+         request.pack(0, NULL, reqdata, m_iPayloadSize);
+         // ID = 0, connection request
+         request.m_iID = 0;
+
+         int hs_size = m_iPayloadSize;
+         m_ConnReq.serialize(reqdata, hs_size);
+         request.setLength(hs_size);
+         sendto(&m_pPeerAddr, request);
          return 1;
       }
    }
@@ -882,7 +963,7 @@ POST_CONNECT:
    pyprintf("Connected My IP = %x\n", m_piSelfIP[0]);
    pyprintf("Connected PeerIP = %x\n", m_pPeerAddr.sin_addr);
 
-   ingress_params(7, m_iPeerISN);
+   ingress_init(7, m_iPeerISN);
    egress_params(m_piSelfIP[0], m_pPeerAddr.sin_addr, m_pPeerAddr.sin_port, m_PeerID);
 
    //   m_piSelfIP[0] = m_ConnRes.m_piPeerIP[0];
@@ -1042,7 +1123,7 @@ void CUDT::connect(const simple_sockaddr_in* peer, CHandShake* hs)
    pyprintf("Server Connected My IP = %x\n", m_piSelfIP[0]);
    pyprintf("Server Connected PeerIP = %x\n", m_pPeerAddr.sin_addr);
 
-   ingress_params(7, m_iPeerISN);
+   ingress_init(7, m_iPeerISN);
    egress_params(m_piSelfIP[0], m_pPeerAddr.sin_addr, m_pPeerAddr.sin_port, m_PeerID);
 
    // And of course, it is connected.
@@ -1859,7 +1940,7 @@ void CUDT::sendCtrl(int pkttype, void* lparam, void* rparam, int size)
          int acksize = CSeqNo::seqoff(m_iRcvLastAck, ack);
 
          m_iRcvLastAck = ack;
-	 
+         ingress_params(7, m_iRcvLastAck);
          // m_pRcvBuffer->ackData(acksize);
 
          // // signal a waiting "recv" call if there is any data available
@@ -1893,7 +1974,7 @@ void CUDT::sendCtrl(int pkttype, void* lparam, void* rparam, int size)
          data[0] = m_iRcvLastAck;
          data[1] = m_iRTT;
          data[2] = m_iRTTVar;
-         data[3] = 2; //m_pRcvBuffer->getAvailBufSize(); FIXME: need way to get size of buffer.
+         data[3] = 16; //m_pRcvBuffer->getAvailBufSize(); FIXME: need way to get size of buffer.
          // a minimum flow window of 2 is used, even if buffer is full, to break potential deadlock
          if (data[3] < 2)
             data[3] = 2;
@@ -2193,6 +2274,7 @@ int CUDT::recvfrom(CPacket& packet) const
 
         if (packet.getFlag()) {
             pout = (volatile uint32_t *)packet.m_pcData;
+            assert(pout);
             for (int j = 0, n = packet.getLength() / 4; j < n; ++ j) {
                 *pout = ntohl(*pin);
                 ++pin;
@@ -2571,9 +2653,9 @@ void CUDT::processCtrl(CPacket& ctrlpkt,
          initdata.m_iFlightFlagSize = m_iFlightFlagSize;
          initdata.m_iReqType = (!m_bRendezvous) ? -1 : -2;
          initdata.m_iID = m_SocketID;
-	 
+
          char *hs = (char *)packet_buffer; // new char [m_iPayloadSize];
-         int hs_size = m_iPayloadSize;
+         int hs_size = m_iPktSize; // Was m_iPayloadSize
          initdata.serialize(hs, hs_size);
          sendCtrl(0, NULL, hs, hs_size);
          //delete [] hs;
@@ -2691,6 +2773,7 @@ int CUDT::packData( struct Block blocks[BUFFERCOUNT], uint64_t& ts)
 
       // check congestion/flow window limit
       int cwnd = (m_iFlowWindowSize < m_iCongestionWindow) ? m_iFlowWindowSize : m_iCongestionWindow;
+      printf("Cwnd = %d, lastAck = %d, CurrSeqNo = %d\n", cwnd, m_iSndLastAck, m_iSndCurrSeqNo);
       if (cwnd >= CSeqNo::seqlen(m_iSndLastAck, CSeqNo::incseq(m_iSndCurrSeqNo)))
       {
 	payload = m_iSndCurrBlock;
